@@ -104,6 +104,7 @@ const SelectionPage = () => {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [imageErrors, setImageErrors] = useState<Record<string, number>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -171,6 +172,8 @@ const SelectionPage = () => {
     return products[currentIndex] ?? null;
   }, [currentIndex, products]);
 
+  const getOriginalIndex = (product: ProductInfo): number => product.sortIndex;
+
   const fetchProgress = useCallback(async () => {
     if (!batchId) return;
     try {
@@ -203,9 +206,11 @@ const SelectionPage = () => {
         });
         setCurrentPage(page);
         setHasMore(data.items.length === PAGE_SIZE);
+        setLoadError(null);
       } catch (error) {
         logger.error('加载商品失败', error);
-        toast.error('加载商品失败');
+        toast.error('加载商品失败，请下拉刷新');
+        setLoadError('加载商品失败，请检查网络后重试');
       } finally {
         setLoading(false);
       }
@@ -316,23 +321,29 @@ const SelectionPage = () => {
       const productId = product.id;
       const prevProducts = products;
       const willBeRemoved = filterDecision !== null && decision !== filterDecision;
+      const currentSortIndex = getOriginalIndex(product);
 
       // 乐观更新
       if (willBeRemoved) {
         setProducts((prev) => prev.filter((p) => p.id !== productId));
-        // 商品被移除，currentIndex 保持不变（下一个自动顶上来）
-        // 但如果移除的是最后一个，回退一位
-        const newLength = prevProducts.length - 1;
-        if (newLength <= 0) {
+        // 找到下一个比当前 sortIndex 大的商品
+        const remaining = prevProducts.filter((p) => p.id !== productId);
+        if (remaining.length === 0) {
           setCurrentIndex(0);
-        } else if (currentIndex >= newLength) {
-          setCurrentIndex(newLength - 1);
+        } else {
+          const nextItem = remaining.find(
+            (p) => getOriginalIndex(p) > currentSortIndex,
+          );
+          const nextIdx = nextItem
+            ? remaining.indexOf(nextItem)
+            : remaining.length - 1;
+          setCurrentIndex(Math.max(0, nextIdx));
         }
       } else {
         setProducts((prev) =>
           prev.map((p) => (p.id === productId ? { ...p, decision } : p)),
         );
-        // 前进到下一个商品
+        // 前进到下一个商品（按数组顺序，已由 sortIndex 排序保证）
         const nextIndex = Math.min(currentIndex + 1, prevProducts.length - 1);
         setCurrentIndex(nextIndex);
       }
@@ -354,7 +365,7 @@ const SelectionPage = () => {
         fetchProgress();
       }
     },
-    [currentIndex, products, fetchProgress, filterDecision],
+    [currentIndex, products, fetchProgress, filterDecision, getOriginalIndex],
   );
 
   const handleJumpPage = useCallback(async () => {
@@ -462,7 +473,13 @@ const SelectionPage = () => {
 
   const handleRefresh = useCallback(() => {
     fetchProgress();
-  }, [fetchProgress]);
+    setLoadError(null);
+    setProducts([]);
+    setHasMore(true);
+    setCurrentPage(1);
+    setCurrentIndex(0);
+    loadPage(1);
+  }, [fetchProgress, loadPage]);
 
   const handleExport = useCallback(
     async (decision: 'keep' | 'pending') => {
@@ -512,7 +529,9 @@ const SelectionPage = () => {
   }, []);
 
   const showEmpty =
-    !loading && products.length === 0 && filterDecision !== null;
+    !loading && products.length === 0 && !loadError && totalCount > 0 && filterDecision !== null;
+  const showLoadError = !loading && products.length === 0 && loadError !== null;
+  const showNothingLoaded = !loading && products.length === 0 && !loadError && totalCount === 0 && progress !== null;
 
   // 打开商品页链接
   const productShopUrl = useMemo(() => {
@@ -819,7 +838,37 @@ const SelectionPage = () => {
       <div className={viewMode === 'bulk' ? 'hidden lg:hidden' : ''}>
       {/* 商品卡片流 */}
       <div className="flex-1 w-full pt-[112px] pb-[150px] px-3 max-w-lg mx-auto">
-        {showEmpty ? (
+         {showLoadError ? (
+           <div className="flex flex-col items-center justify-center py-20">
+             <p className="text-sm text-red-500 font-medium">{loadError}</p>
+             <button
+               type="button"
+               onClick={() => {
+                 setLoadError(null);
+                 setHasMore(true);
+                 loadPage(1);
+               }}
+               className="mt-3 px-4 py-2 text-sm bg-blue-500 text-white rounded-lg font-medium"
+             >
+               重新加载
+             </button>
+           </div>
+         ) : showNothingLoaded ? (
+           <div className="flex flex-col items-center justify-center py-20">
+             <p className="text-sm text-gray-500">暂无商品数据</p>
+             <button
+               type="button"
+               onClick={() => {
+                 fetchProgress();
+                 setHasMore(true);
+                 loadPage(1);
+               }}
+               className="mt-3 px-4 py-2 text-sm bg-blue-500 text-white rounded-lg font-medium"
+             >
+               刷新
+             </button>
+           </div>
+         ) : showEmpty ? (
           <div className="flex flex-col items-center justify-center py-20">
             <p className="text-sm text-gray-500">已全部处理完</p>
             <button
@@ -877,9 +926,9 @@ const SelectionPage = () => {
                         当前
                       </span>
                     )}
-                    <span className="absolute top-2 right-2 z-10 px-2 py-0.5 text-xs bg-black/50 text-white rounded">
-                      #{idx + 1}
-                    </span>
+               <span className="absolute top-2 right-2 z-10 px-2 py-0.5 text-xs bg-black/50 text-white rounded">
+                       #{getOriginalIndex(product)}
+                     </span>
 
                     {/* 商品图片 */}
                     <div className="w-full h-[200px] bg-gray-100 relative overflow-hidden">

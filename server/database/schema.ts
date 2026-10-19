@@ -1,7 +1,7 @@
 /* eslint-disable */
 /** auto generated, do not edit */
 import { sql } from 'drizzle-orm';
-import { foreignKey, index, integer, pgTable, text, uuid, varchar, customType } from "drizzle-orm/pg-core"
+import { foreignKey, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid, varchar, customType } from "drizzle-orm/pg-core"
 
 export const customTimestamptz = customType<{
   data: Date;
@@ -117,6 +117,22 @@ export const fileAttachmentArray = customType<{
   },
 });
 
+export const opType = pgEnum("op_type", ['INSERT', 'UPDATE', 'DELETE']);
+
+export const pgAudit = pgTable("pg_audit", {
+  eventId: varchar("event_id", { length: 64 }).primaryKey(),
+  eventTime: timestamp("event_time", { mode: 'string' }).notNull(),
+  targetTable: varchar("target_table", { length: 255 }).notNull(),
+  type: opType("type").notNull(),
+  /**
+   * 数据变更日志详情
+   */
+  details: jsonb("details"),
+}, (table) => [
+  index("idx_pg_audit_table_name").on(table.targetTable, table.eventTime),
+  index("idx_pg_audit_table").on(table.targetTable),
+]);
+
 export const products = pgTable("products", {
   id: uuid("id").primaryKey().defaultRandom(),
   batchId: uuid("batch_id").notNull(),
@@ -171,6 +187,8 @@ export const batches = pgTable("batches", {
   totalCount: integer("total_count").notNull().default(0),
   pendingCount: integer("pending_count").notNull().default(0),
   status: varchar("status", { length: 20 }).notNull().default('processing'),
+  deletedAt: customTimestamptz("deleted_at", { precision: 3 }),
+  deletedBy: userProfile("deleted_by"),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)
@@ -185,4 +203,5 @@ export const batches = pgTable("batches", {
 
 // table aliases
 export const batchesTable = batches;
+export const pgAuditTable = pgAudit;
 export const productsTable = products;

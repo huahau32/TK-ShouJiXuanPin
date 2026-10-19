@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { DRIZZLE_DATABASE, type PostgresJsDatabase } from "@lark-apaas/fullstack-nestjs-core";
-import { eq, desc, asc, count, and, inArray } from 'drizzle-orm';
+import { eq, desc, asc, count, and, inArray, isNull } from 'drizzle-orm';
 import { batches, products } from "@server/database/schema";
 import type {
   BatchInfo,
@@ -12,6 +12,10 @@ import type {
   UploadResponse,
 } from '@shared/api.interface';
 import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
+import * as QRCode from 'qrcode';
+// eslint-disable-next-line import/no-extraneous-dependencies
+import JSZip from 'jszip';
 
 const BATCH_SIZE = 2000;
 const DECISIONS: DecisionType[] = ['untouched', 'keep', 'discard', 'pending'];
@@ -276,6 +280,7 @@ export class SelectionService {
     const batchList = await this.db
       .select()
       .from(batches)
+      .where(isNull(batches.deletedAt))
       .orderBy(desc(batches.createdAt));
 
     if (batchList.length === 0) {
@@ -504,14 +509,13 @@ export class SelectionService {
 
   async exportBatch(batchId: string, decision: 'keep' | 'pending'): Promise<{ buffer: Buffer; fileName: string }> {
     const [batchResult, productRows] = await Promise.all([
-      this.db.select({ fileName: batches.fileName }).from(batches).where(eq(batches.id, batchId)),
+      this.db.select({ fileName: batches.fileName }).from(batches).where(and(eq(batches.id, batchId), isNull(batches.deletedAt))),
       this.db
         .select({
           title: products.title,
-          category: products.category,
-          shopName: products.shopName,
-          priceBrl: products.priceBrl,
+          productId: products.productId,
           productUrl: products.productUrl,
+          imageUrl: products.imageUrl,
         })
         .from(products)
         .where(and(eq(products.batchId, batchId), eq(products.decision, decision)))
@@ -526,23 +530,128 @@ export class SelectionService {
     const suffix = decision === 'keep' ? '要' : '待定';
     const fileName = `${baseName}_${suffix}.xlsx`;
 
-    const exportData = productRows.map((p) => ({
-      商品标题: p.title,
-      商品类目: p.category ?? '',
-      店铺名称: p.shopName ?? '',
-      '售价(BRL)': p.priceBrl ?? '',
-      商品链接: p.productUrl,
-    }));
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('选品');
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData, {
-      header: ['商品标题', '商品类目', '店铺名称', '售价(BRL)', '商品链接'],
-    });
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, '选品');
+    worksheet.columns = [
+      { key: 'index', width: 20.625 },
+      { key: 'productId', width: 20.625 },
+      { key: 'image', width: 13 },
+      { key: 'qrcode', width: 13 },
+      { key: 'title', width: 100.625 },
+    ];
 
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    worksheet.getColumn(1).width = 20.625;
+    worksheet.getColumn(2).width = 20.625;
+    worksheet.getColumn(3).width = 13;
+    worksheet.getColumn(4).width = 13;
+    worksheet.getColumn(5).width = 100.625;
 
-    return { buffer, fileName };
+    const headerRow = worksheet.getRow(1);
+    headerRow.values = ['序号', '产品ID', '产品图片', '产品详情', '视频标题'];
+    headerRow.font = { bold: true, size: 11 };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    headerRow.border = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    };
+    headerRow.height = 20;
+
+    const ROW_HEIGHT = 100;
+    const IMG_CELL_SIZE_PX = 95;
+    const QR_SIZE_PX = 95;
+
+    for (let i = 0; i < productRows.length; i++) {
+      const rowIndex = i + 2;
+      const row = worksheet.getRow(rowIndex);
+      const product = productRows[i];
+      const productIdNum = product.productId || extractProductIdFromTikTok(product.productUrl) || '';
+
+      row.getCell(1).value = i + 1;
+      row.getCell(2).value = productIdNum;
+      row.getCell(5).value = product.title;
+
+      row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      row.getCell(5).alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+      row.height = ROW_HEIGHT;
+
+      for (let c = 1; c <= 5; c++) {
+        row.getCell(c).border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
+      }
+
+      if (product.imageUrl) {
+        try {
+          const imgResponse = await fetch(product.imageUrl, {
+            signal: AbortSignal.timeout(8000),
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MiaodaExport/1.0)' },
+          });
+          if (imgResponse.ok) {
+            const imgArrayBuffer = await imgResponse.arrayBuffer();
+            const imgBuffer = Buffer.from(imgArrayBuffer as unknown as Uint8Array) as unknown as ExcelJS.Buffer;
+            const imgId = workbook.addImage({
+              buffer: imgBuffer,
+              extension: 'jpeg',
+            });
+            worksheet.addImage(imgId, {
+              tl: { col: 2 + 0.05, row: rowIndex - 1 + 0.05 },
+              ext: { width: IMG_CELL_SIZE_PX, height: IMG_CELL_SIZE_PX },
+              editAs: 'oneCell',
+            });
+          }
+        } catch {
+          // skip image on error
+        }
+      }
+
+      if (productIdNum) {
+        try {
+          const qrUrl = `https://shop.tiktok.com/view/product/${productIdNum}?source=agency&region=br`;
+          const qrDataUrl = await QRCode.toDataURL(qrUrl, {
+            errorCorrectionLevel: 'H',
+            margin: 1,
+            width: 512,
+          });
+          const qrBase64 = qrDataUrl.replace(/^data:image\/png;base64,/, '');
+          const qrBuffer = Buffer.from(qrBase64, 'base64') as unknown as ExcelJS.Buffer;
+          const qrImgId = workbook.addImage({
+            buffer: qrBuffer,
+            extension: 'png',
+          });
+          worksheet.addImage(qrImgId, {
+            tl: { col: 3 + 0.05, row: rowIndex - 1 + 0.05 },
+            ext: { width: QR_SIZE_PX, height: QR_SIZE_PX },
+            editAs: 'oneCell',
+          });
+        } catch {
+          // skip qr on error
+        }
+      }
+    }
+
+    let buffer = await workbook.xlsx.writeBuffer();
+
+    const zip = await JSZip.loadAsync(buffer as unknown as Blob);
+    const sheetXml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+    const splitColsXml =
+      '<cols>' +
+      '<col min="1" max="1" width="20.625" customWidth="1"/>' +
+      '<col min="2" max="2" width="20.625" customWidth="1"/>' +
+      '<col min="3" max="3" width="13" customWidth="1"/>' +
+      '<col min="4" max="4" width="13" customWidth="1"/>' +
+      '<col min="5" max="5" width="100.625" customWidth="1"/>' +
+      '</cols>';
+    const newSheetXml = sheetXml.replace(/<cols>.*<\/cols>/s, splitColsXml);
+    zip.file('xl/worksheets/sheet1.xml', newSheetXml);
+    buffer = (await zip.generateAsync({ type: 'nodebuffer' })) as unknown as ArrayBuffer;
+
+    return { buffer: Buffer.from(buffer as unknown as Uint8Array), fileName };
   }
 
   async proxyImage(url: string): Promise<{ buffer: Buffer; contentType: string }> {
@@ -575,17 +684,23 @@ export class SelectionService {
     return { buffer, contentType };
   }
 
-  async deleteBatch(batchId: string): Promise<{ deletedBatchId: string }> {
+  async deleteBatch(batchId: string, userId: string): Promise<{ deletedBatchId: string }> {
     const batch = await this.db
       .select({ id: batches.id })
       .from(batches)
-      .where(eq(batches.id, batchId));
+      .where(and(eq(batches.id, batchId), isNull(batches.deletedAt)));
 
     if (batch.length === 0) {
       throw new NotFoundException('批次不存在');
     }
 
-    await this.db.delete(batches).where(eq(batches.id, batchId));
+    await this.db
+      .update(batches)
+      .set({
+        deletedAt: new Date(),
+        deletedBy: userId,
+      })
+      .where(eq(batches.id, batchId));
 
     return { deletedBatchId: batchId };
   }

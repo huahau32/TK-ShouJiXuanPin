@@ -9,10 +9,12 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { SelectionService } from './selection.service';
@@ -130,7 +132,8 @@ export class SelectionController {
   }
 
   @Delete('batches/:batchId')
-  async deleteBatch(@Param('batchId') batchId: string) {
-    return this.selectionService.deleteBatch(batchId);
+  async deleteBatch(@Param('batchId') batchId: string, @Req() req: Request) {
+    const userId = req.userContext?.userId ?? '';
+    return this.selectionService.deleteBatch(batchId, userId);
   }
 }

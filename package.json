@@ -47,7 +47,9 @@
     "dayjs": "^1.11.15",
     "dotenv": "^17.2.2",
     "drizzle-orm": "0.44.6",
+    "exceljs": "^4.4.0",
     "hbs": "^4.2.0",
+    "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "reflect-metadata": "^0.1.14",
     "tslib": "^2.8.1",
@@ -55,7 +57,7 @@
   },
   "devDependencies": {
     "@hookform/resolvers": "^5.2.2",
-    "@lark-apaas/client-toolkit": "^1.2.74",
+    "@lark-apaas/client-toolkit": "^1.2.75",
     "@lark-apaas/coding-preset-vite-react": "^1.0.25",
     "@lark-apaas/fullstack-presets": "^1.1.25",
     "@nestjs/cli": "^10.4.9",

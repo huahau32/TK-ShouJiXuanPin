@@ -283,12 +283,12 @@ const BulkScreener = ({ batchId, progress, onProgressRefresh }: BulkScreenerProp
       </div>
 
       <div className="fixed bottom-4 left-0 right-0 z-50 w-full px-5 pointer-events-none">
-        <div className="pointer-events-auto max-w-full mx-auto flex items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 shadow-lg shadow-amber-900/10">
-          <div className="flex items-center gap-2">
+        <div className="pointer-events-auto max-w-full mx-auto grid grid-cols-3 items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 shadow-lg shadow-amber-900/10">
+          <div className="flex items-center gap-2 justify-start">
             <span className="text-sm font-medium text-amber-900">已选 {totalSelected} 个</span>
             {submitting && <Loader2 className="w-4 h-4 text-amber-700 animate-spin" />}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 justify-center">
             <Button
               size="sm"
               variant="outline"
@@ -331,7 +331,7 @@ const BulkScreener = ({ batchId, progress, onProgressRefresh }: BulkScreenerProp
               const proxySrc = getImageProxyUrl(product.imageUrl);
               const hasError = imageErrors[product.id] !== undefined;
               const imgKey = `${product.id}-${imageErrors[product.id] ?? 0}`;
-              const globalIndex = (currentPage - 1) * BULK_PAGE_SIZE + idx + 1;
+              const globalIndex = product.sortIndex;
               const colIndex = idx % columns;
               const isLastInRow = colIndex === columns - 1 || idx === products.length - 1;
               const rowIndex = Math.floor(idx / columns);
